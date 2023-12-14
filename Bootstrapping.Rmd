@@ -1,0 +1,158 @@
+---
+title: "Bootstrapping"
+author: "Valentina Paz Campos Olguín"
+date: "2023-12-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggpubr)
+library(boot)
+library(simpleboot)
+library(ez)
+library(tidyverse)
+```
+
+¿Hay similar ingresos entre el Norte/Centro/Sur de Chile de las personas que pertenecen a Fonasa/Isapre y además que hayan terminado la enseñanza media?
+
+**Formulación de hipótesis**
+
+Ho: No existe diferencia entre los ingresos de las viviendas de 3 sectores de Chile (Norte, Centro y Sur).
+
+Ha: Sí hay diferencia entre los ingresos de las viviendas de 3 sectores de Chile (Norte, Centro y Sur). Es decir, hay al menos uno que se diferencia de los otros dos sectores.
+
+**Desarrollo**
+
+Lo primero para resolver el ejercicio es filtrar los datos, partiendo por las personas que tuvieron una educación media científico humanista.
+
+```{r}
+set.seed(200)
+datos <- read.csv2("EP08.csv", encoding = 'Latin1')
+head(datos)
+#datos <- subset(datos, select = c(id.vivienda, region, e6a, s12, ytotcorh))
+#datos <- datos %>%
+  #filter(e6a == "Educación Media Científico-Humanista" & s12 == "1")
+n <- sample(400:599, 1)
+```
+
+Se secciona el país en 3: Norte, Centro y Sur.
+
+```{r}
+datos_norte <- datos %>%
+  filter( region != "Región de Valparaíso" &
+                        region != "Región Metropolitana de Santiago" &
+                        region != "Región del Libertador Gral. Bernardo O\u0092Higgins" &
+                        region != "Región del Maule" &
+                        region != "Región del Biobío" &
+                        region != "Región de La Araucanía" &
+                        region != "Región de Los Lagos" &
+                        region != "Región de Ayséndel Gral. Carlos Ibáñez del Campo" &
+                        region != "Región de Magallanes y de la Antártica Chilena" &
+                        region != "Región de Los Ríos" &
+                        region != "Región de Ñuble") %>%
+                sample_n(n)
+
+datos_centro <- datos %>% 
+  filter(region != "Región de Los Lagos" &
+                        region != "Región de La Araucanía" &
+                        region != "Región de Ayséndel Gral. Carlos Ibáñez del Campo" &
+                        region != "Región de Magallanes y de la Antártica Chilena" &
+                        region != "Región de Los Ríos" &
+                        region != "Región de Ñuble" &
+                        region != "Región de Antofagasta" &
+                        region != "Región de Tarapacá" &
+                        region != "Región de Atacama" &
+                        region != "Región de Coquimbo") %>%
+                        sample_n(n)
+
+datos_sur <- datos %>% 
+  filter(   region != "Región de Valparaíso" &
+                        region != "Región Metropolitana de Santiago" &
+                        region != "Región del Libertador Gral. Bernardo O\u0092Higgins" &
+                        region != "Región del Maule" &
+                        region != "Región del Biobío" &
+                        region != "Región de Antofagasta" &
+                        region != "Región de Tarapacá" &
+                        region != "Región de Atacama" &
+                        region != "Región de Coquimbo" )%>%
+                        sample_n(n)
+```
+
+Ya teniendo los datos filtrados, se debe transformar el dataframe a formato largo.
+
+```{r}
+ingresos_norte <- datos_norte$ytotcorh
+ingresos_centro <- datos_centro$ytotcorh
+ingresos_sur <- datos_sur$ytotcorh
+
+nInstancias <- factor(1:n)
+
+ingresosRegiones <- data.frame(ingresos_norte, ingresos_centro, ingresos_sur)
+
+ingresosRegiones <- ingresosRegiones %>%
+  pivot_longer(c(ingresos_norte, ingresos_centro, ingresos_sur),
+               names_to = "Regiones",
+               values_to = "Ingresos")
+
+ingresosRegiones$Regiones <- factor(ingresosRegiones$Regiones)
+ingresosRegiones$nInstancias <- factor(1:nrow(ingresosRegiones))
+```
+
+```{r}
+media_regiones <- mean(ingresosRegiones$Ingresiones)
+print(media_regiones)
+
+valor_obs <- ezANOVA(data = ingresosRegiones,
+                     dv = Ingresos,
+                     between = Regiones,
+                     wid = nInstancias,
+                     return_aov = TRUE)
+
+print(valor_obs$ANOVA$F)
+```
+
+Se procede a realizar bootstrap para cada muestra.
+
+```{r}
+B <- 999
+
+media <- function(valores, i){
+  mean(valores[i])
+}
+
+distribucion_norte <- boot(ingresos_norte, statistic = media, R = B)
+distribucion_centro <- boot(ingresos_centro, statistic = media, R = B)
+distribucion_sur <- boot(ingresos_sur, statistic = media, R = B)
+
+ingresos_norte_boot <- c(distribucion_norte$data)
+ingresos_centro_boot <- c(distribucion_centro$data)
+ingresos_sur_boot <- c(distribucion_sur$data)
+```
+
+Luego de esto, se debe transformar a formato largo para usar ANOVA.
+
+```{r}
+ingresos_regiones_boot <- data.frame(ingresos_norte_boot, ingresos_centro_boot, ingresos_sur_boot)
+ingresos_regiones_boot <- ingresos_regiones_boot %>%
+  pivot_longer(c(ingresos_norte_boot, ingresos_centro_boot, ingresos_sur_boot),
+               names_to = "Regiones",
+               values_to = "Ingresos")
+ingresos_regiones_boot$Regiones <- factor(ingresos_regiones_boot$Regiones)
+ingresos_regiones_boot$Instancias <- factor(1:nrow(ingresos_regiones_boot))
+```
+
+Se obtiene un valor observado bootstrap, aplicando ANOVA.
+
+```{r}
+valor_observado_boot <- ezANOVA(data = ingresos_regiones_boot,
+                                dv = Ingresos,
+                                between = Regiones,
+                                wid = Instancias,
+                                return_aov = TRUE)
+print(summary(valor_observado_boot$aov))
+sprintf("F value con bootstrap y sin bootstrap")
+print(valor_observado_boot$ANOVA$F)
+print(valor_obs$ANOVA$F)
+```

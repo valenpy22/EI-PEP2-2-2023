@@ -1,0 +1,270 @@
+---
+title: "Regresión Lineal Múltiple"
+author: "Valentina Paz Campos Olguín"
+date: "2023-12-14"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(car)
+library(caret)
+library(leaps)
+library(dplyr)
+library(ggpubr)
+library(pROC)
+library(lmtest)
+```
+
+Usando las herramientas del paquete leaps, realizar una búsqueda
+exhaustiva para seleccionar entre dos y ocho predictores que ayuden a
+estimar la variable Peso (Weight), obviamente sin considerar las nuevas
+variables IMC ni EN, y luego utilizar las funciones del paquete caret
+para construir un modelo de regresión lineal múltiple con los
+predictores escogidos y evaluarlo usando bootstrapping.
+
+Para empezar, se debe leer los datos del CSV y verificar que se estén
+leyendo correctamente.
+
+{r} datos \<- read.csv2("EI-EP-09-10-11/EP09/EP09 Datos.csv")
+head(datos)
+
+Se debe crear una nueva columna para calcular el IMC, tomando el peso y
+dividiéndolo por su altura en metros al cuadrado. Luego, en base a el
+IMC, se crea una nueva columna llamada "EN" (Estado Nutricional), si el
+IMC es mayor o igual que 25 significa que la persona tiene sobrepeso y
+esto se determina con un 1.
+
+{r} datos[["IMC"]] \<- datos[["Weight"]]/((datos[["Height"]])/100)\^2
+datos[["EN"]] \<- ifelse(datos[["IMC"]] \>= 25, 1, 0) datos[["EN"]] \<-
+factor(datos[["EN"]]) head(datos)
+
+Luego de agregar ambas columnas, se define la semilla a utilizar. Esta
+es definida por los 5 primeros números del RUN del integrante de mayor
+edad del equipo. En este caso emplearemos una semilla distinta para
+obtener otros resultados.
+
+Se selecciona una muestra de 100 personas, asegurando que la mitad tenga
+estado nutricional "Sobrepeso" y la otra mitad "No sobrepeso".
+
+Primero se saca una muestra de 50 personas donde tengan sobrepeso, una
+muestra de 50 personas sin sobrepeso y luego se unen ambas muestras.
+
+{r} set.seed(200) sobrepeso \<- datos %\>% filter(EN == 1) %\>%
+sample_n(50) nosobrepeso \<- datos %\>% filter(EN == 0) %\>%
+sample_n(50) muestra \<- rbind(sobrepeso, nosobrepeso)
+
+A continuación, se pide realizar una búsqueda exhaustiva para
+seleccionar entre 2 y 8 predictores que ayuden a predecir la variable
+Peso (Weight), obviamente sin considerar las nuevas variables IMC ni EN,
+y luego utilizar las funciones del paquete caret para construir un
+modelo de regresión lineal múltiple con los predictores escogidos y
+evaluarlo usando boostrapping.
+
+Para empezar con esta sección, se deben eliminar las variables IMC y EN
+del conjunto, luego se hace un modelo con un máximo de 8 predictores y
+se muestra el gráfico del modelo.
+
+{r} datos_n \<- muestra %\>% select(-c(IMC, EN)) predictores_potenciales
+\<- regsubsets(Weight \~ ., data = datos_n, nbest = 1, nvmax = 8, method
+= "exhaustive") plot(predictores_potenciales)
+
+Para definir los mejores predictores se deben analizar las variables que
+tengan una línea continua y larga. En este caso, se tiene a Chest.depth,
+Chest.diameter, Ankles.diameter, Waist.Girth, Thigh.Girth, Forearm.Girth
+y Height.
+
+Se procede a seleccionar estos predictores con menos BIC y se ajusta el
+modelo usando boostrapping.
+
+{r} \# Se seleccionan los datos de entrenamiento y de prueba \# n_rlm:
+cantidad de filas n_rlm \<- nrow(datos_n)
+
+# 80% será para el entrenamiento y 20% para la prueba
+
+n_entrenamiento_rlm \<- floor(0.8 \* n_rlm)
+
+# Datos aleatorios
+
+m_rlm \<- sample.int(n = n_rlm, size = n_entrenamiento_rlm, replace =
+FALSE)
+
+# Datos de entrenamiento
+
+entrenamiento_rlm \<- datos_n[m_rlm, ]
+
+# Datos de prueba
+
+prueba_rlm \<- datos_n[-m_rlm, ]
+
+rlm \<- train(Weight \~ Chest.depth + Chest.diameter + Ankles.diameter +
+Waist.Girth + Thigh.Girth + Forearm.Girth + Height, data = datos_n,
+method = "lm", trControl = trainControl(method = "boot")) summary(rlm)
+
+Se tiene un R² ajustado de 0,9745. Esto quiere decir que el modelo
+explica el 97,45% de la variabilidad de los datos, siendo bastante alto
+este valor.
+
+A continuación, se hace una predicción en base al modelo establecido y
+los datos de la muestra. Para ello se deben calcular las predicciones,
+eliminarlos del conjunto de datos de la muestra y se calcula el error
+aplicando la raíz a la media del error.
+
+{r} \# Error cuadrático medio del modelo de entrenamiento
+predicciones_entrenamiento \<- predict(rlm, entrenamiento_rlm)
+error_entrenamiento \<- entrenamiento_rlm[["Weight"]] -
+predicciones_entrenamiento rmse \<- mean(error_entrenamiento)\*\* 2
+cat("\nEl error cuadrático medio es:", rmse)
+
+# Error cuadrático medio del modelo de prueba
+
+predicciones_prueba \<- predict(rlm, prueba_rlm) error_prueba \<-
+prueba_rlm[["Weight"]] - predicciones_prueba rmse_prueba \<-
+mean(error_prueba)\*\*2 cat("\nEl error cuadrático medio del modelo de
+prueba es de:", rmse_prueba)
+
+Se tiene un error cuadrático medio de 0.01 en el modelo de entrenamiento
+y un error cuadrático medio de 0.16, lo que es muy bajo al hablar en
+términos de peso.
+
+Se puede concluir que el modelo puede ser generalizable en relación a
+las predicciones hechas.
+
+Se deben obtener los residuos y estadísticas de influencia de los casos.
+
+{r} eval_modelo \<- data.frame(predicted.probabilities =
+fitted(rlm[["finalModel"]]))
+
+eval_modelo[["residuos_estandarizados"]] \<-
+rstandard(rlm[["finalModel"]]) eval_modelo[["residuos_estudiantizados"]]
+\<- rstudent(rlm[["finalModel"]]) eval_modelo[["distancia_cook"]] \<-
+cooks.distance(rlm[["finalModel"]]) eval_modelo[["dfbeta"]] \<-
+dfbeta(rlm[["finalModel"]]) eval_modelo[["dffit"]] \<-
+dffits(rlm[["finalModel"]]) eval_modelo[["apalancamiento"]] \<-
+hatvalues(rlm[["finalModel"]]) eval_modelo[["covratio"]] \<-
+covratio(rlm[["finalModel"]])
+
+A partir de estos resultados se procede a evaluar los casos sospechosos.
+
+Sospechosos: Residuos estandarizados
+
+{r} sospechosos_re \<-
+which(abs(eval_modelo[["residuos_estandarizados"]]) \> 1.96) cat("\#
+Residuos estandarizados fuera del 95% esperado \# \n", sospechosos_re)
+
+Sospechosos: Distancias de Cook
+
+En este caso no se presentan casos con una distancia de Cook mayor a 1.
+
+{r} sospechosos_cook \<- which(eval_modelo[["distancia_cook"]] \> 1)
+cat("\# Residuos con distancia de Cook mayor a 1 \# \n",
+sospechosos_cook)
+
+Sospechosos: Apalancamiento superior al doble del apalancamiento
+promedio
+
+{r} apalancamiento_promedio \<- ncol(datos_n)/nrow(datos_n)
+sospechosos_apalancamiento \<- which(eval_modelo[["apalancamiento"]] \>
+2 \* apalancamiento_promedio) cat("\# Residuos con apalancamiento fuera
+del rango promedio, teniendo como promedio igual a:",
+apalancamiento_promedio, " \n", sospechosos_apalancamiento)
+
+Sospechosos: Dfbeta mayor o igual a 1
+
+{r} sospechosos_dfbeta \<- which(apply(eval_modelo[["dfbeta"]] \>= 1, 1,
+any)) cat(" \# Residuos con dfbeta mayor o igual a 1 \#\n",
+sospechosos_dfbeta)
+
+Sospechosos: Covarianzas fuera del rango
+
+{r} covratio_inf \<- 1 - 3*apalancamiento_promedio covratio_sup \<- 1 +
+3*apalancamiento_promedio
+
+sospechosos_covratio \<- which( eval_modelo[["covratio"]] \<
+covratio_inf \| eval_modelo[["covratio"]] \> covratio_sup ) cat(" \#
+Residuos con razón de covarianza fuera de rango \# \n",
+sospechosos_covratio)
+
+Se deben agrupar todos los sospechosos en uno solo para poder evaluar
+cuántos hay realmente. Para esto se deben eliminar los duplicados.
+
+{r} sospechosos \<- c(sospechosos_re, sospechosos_cook,
+sospechosos_apalancamiento, sospechosos_dfbeta, sospechosos_covratio)
+sospechosos \<- sort(unique(sospechosos)) cat(" \# Se tienen los
+siguientes datos sospechosos: \n") print(round(eval_modelo[sospechosos,
+c("distancia_cook", "apalancamiento", "covratio")], 3))
+
+A partir de estos resultados, se tiene que existen observaciones
+atípicas, pero ninguna tiene una distancia de cook mayor a 1, por lo que
+no son causa de preocupación y se puede seguir con la evaluación del
+modelo. Para ello, se hace el test de Durbin y Watson para analizar la
+independencia de los datos.
+
+{r} cat(" \# Independencia de los residuos \# \n") durbin_watson \<-
+durbinWatsonTest(rlm[["finalModel"]]) print(durbin_watson)
+if(durbin_watson$p > 0.05){  cat("Como p > 0.05, se falla en rechazar la hipótesis nula: Se tiene dependencia de los datos. Por lo que se asume independencia.\n")  cat("Los residuos tienen independencia, con un valor de p de: ", durbin_watson$p)
+}else{ cat("Como p \< 0.05, se rechaza la hipótesis nula en favor de la
+hipótesis alternativa, teniendo una dependencia de los datos con un
+valor de p de: ", durbin_watson\$p) }
+
+Condiciones
+
+{r} modelo \<- rlm\$finalModel
+
+# 1. Comprobar independencia de los residuos
+
+cat("Prueba de Durbin - Watson para autocorrelaciones entre errores:")
+print(durbin_watson)
+
+# 2. Comprobar normalidad de los residuos
+
+cat("Prueba de normalidad para los residuos:")
+print(shapiro.test(modelo\$residuals))
+
+# 3. Comprobar homocedasticidad de los residuos
+
+cat("Prueba de homocedasticidad para los residuos:")
+print(ncvTest(modelo))
+
+# 4. Comprobar la multicolinealidad
+
+vifs \<- vif(modelo) cat("Verificación de la multicolinealidad:")
+cat("VIFS: \n") print(vifs) cat("Tolerancias: \n") print(1/vifs)
+cat("VIF promedio:", mean(vifs), "\n")
+
+En resumen, se tienen los siguientes resultados de aplicar las
+diferentes pruebas:
+
+Normalidad: Para verificar si los datos siguen una distribución normal,
+se utilizó un valor de p. Como el valor de p es mayor a 0.05, se
+considera que se cumple con la condición de normalidad.
+
+Independencia: Se realizó un test de independencia entre los residuos.
+Un valor cercano a 1 indica que los residuos son independientes entre
+sí.
+
+Homocedasticidad: Se llevó a cabo un test de homocedasticidad para
+evaluar si los errores de la regresión tienen una varianza constante. Un
+valor de p menor a 0.05 indica que la suposición de homocedasticidad no
+se cumple.
+
+Multicolinealidad: Se examinó la presencia de multicolinealidad, que es
+cuando existe una alta correlación entre las variables predictoras. No
+hay ninguna variable que sobrepase 10, por lo que no es motivo de
+preocupación.
+
+Tolerancia: Se analizó la tolerancia de las variables, que es el inverso
+del VIF. Los valores problemáticos son aquellos que son menores a 0.2.
+No se identificaron variables con problemáticas en tolerancia.
+
+Finalmente, se puede decir que el modelo presenta una gran confiabilidad
+debido a que solamente falla en una condición. Como ninguno de los
+predictores seleccionados para el modelo tienen VIFs mayores a 10
+(generando así menor poder predictivo y estimaciones menos precisas)
+valida esta conclusión. Sin embargo, el modelo no cumple con la
+suposición de homocedasticidad, por lo que reduce la eficacia de las
+predicciones.
